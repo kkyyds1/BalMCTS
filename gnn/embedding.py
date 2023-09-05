@@ -201,62 +201,8 @@ class GNN(nn.Module):
         
         return Q
     
-    def update_parameters(self, predicted_q, target_q):
-        optimizer = optim.Adam(self.parameters(), lr=0.01)
-        # Compute the loss
-        loss = F.mse_loss(predicted_q, target_q)
-
-        # Zero gradients
-        optimizer.zero_grad()
-
-        # Perform a backward pass (backpropagation)
-        loss.backward()
-
-        # Update the parameters
-        optimizer.step()
-
-        return loss
     
-    @classmethod
-    def update_model(cls, old_net, new_net):
-        new_state_dict = new_net.state_dict()
-        
-        old_net.load_state_dict(new_state_dict)
-        
-        return old_net
-
-    @classmethod
-    def samples(cls, target_net, online_net, epr, batch_size):
-        samples = epr.sample(batch_size)
-        losses = []
-        for sample in samples:
-            state, var_constr_index, constr_var_index, action, next_state, next_var_constr_index, next_constr_var_index, reward, T = sample
-            
-            predicted_Q = online_net.predict(next_var_constr_index, next_constr_var_index, next_state)
-            predicted_q = predicted_Q[action].unsqueeze(0)  # Select the Q value for the action and add a dimension
-            
-            # 如果是终止状态，目标Q值就是奖励
-            if T:
-                target_q = torch.tensor([reward])
-            else:
-                # 否则，目标Q值是奖励加上折扣后的未来最小Q值
-                next_Q = target_net.predict(next_var_constr_index, next_constr_var_index, next_state)
-                next_q = torch.min(next_Q)
-                y = torch.tensor([reward]) + 0.99 * next_q
-            loss = online_net.update_parameters(predicted_q, y)
-            
-            losses.append(loss.item())
-
-        return losses
-
-    @classmethod
-    def save_model(cls, net, path):
-        torch.save(net.state_dict(), path)
     
-    @classmethod
-    def load_model(cls, net, path):
-        net.load_state_dict(torch.load(path))
-
 class DDQN:
     def __init__(self, input_dim, output_dim, init_input_dim, init_output_dim, num_layers, phase, path=None):
         self.target_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers)
@@ -299,7 +245,21 @@ class DDQN:
         self.online_net.load_state_dict(torch.load(path))
         self.target_net.load_state_dict(torch.load(path))
         
+    def update_parameters(self, predicted_q, target_q):
+        optimizer = optim.Adam(self.online_net.parameters(), lr=0.01)
+        # Compute the loss
+        loss = F.mse_loss(predicted_q, target_q)
 
+        # Zero gradients
+        optimizer.zero_grad()
+
+        # Perform a backward pass (backpropagation)
+        loss.backward()
+
+        # Update the parameters
+        optimizer.step()
+
+        return loss
 
 # data = create_data(variables, constraints)
 
