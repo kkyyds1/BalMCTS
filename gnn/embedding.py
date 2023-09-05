@@ -205,8 +205,6 @@ class GNN(nn.Module):
             return torch.argmin(Q).item()
         return Q
     
-    
-    
 class DDQN:
     def __init__(self, input_dim, output_dim, init_input_dim, init_output_dim, num_layers, phase, path=None):
         self.target_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers)
@@ -221,16 +219,17 @@ class DDQN:
         for sample in samples:
             state, var_constr_index, constr_var_index, action, next_state, next_var_constr_index, next_constr_var_index, reward, T = sample
             
-            predicted_Q = self.online_net.predict(next_var_constr_index, next_constr_var_index, next_state)
-            predicted_q = predicted_Q[action].unsqueeze(0)  # Select the Q value for the action and add a dimension
+            predicted_q = self.online_net.predict(var_constr_index, constr_var_index, state, action=True)  # Select the Q value for the action and add a dimension
+            
+            predicted_action = self.online_net.predict(next_var_constr_index, next_constr_var_index, next_state, action=True)
             
             # 如果是终止状态，目标Q值就是奖励
             if T:
-                target_q = torch.tensor([reward])
+                y = torch.tensor([reward])
             else:
                 # 否则，目标Q值是奖励加上折扣后的未来最小Q值
                 next_Q = self.target_net.predict(next_var_constr_index, next_constr_var_index, next_state)
-                next_q = torch.min(next_Q)
+                next_q = next_Q(predicted_action)
                 y = torch.tensor([reward]) + 0.99 * next_q
             loss = self.online_net.update_parameters(predicted_q, y)
             
