@@ -192,13 +192,17 @@ class GNN(nn.Module):
         Q = self.fc_q_value(variable_cat_features)
         return Q
     
-    def predict(self, var_constr_index, constr_var_index, data):
+    def predict(self, var_constr_index, constr_var_index, data, action=False):
         # 创建变量和约束每一层的特征张量
         self.initialize_layer_zero(data.x, len(var_constr_index))
         self.aggregate(var_constr_index, constr_var_index, data.x)
         
-        Q = self.embedding_Q()
-        
+        Q = self.embedding_Q(data,var_constr_index)
+        if action:
+            for var_index in range(len(var_constr_index)):
+                if int(data.x[var_index][1]):
+                    Q[var_index] = float('inf')
+            return torch.argmin(Q).item()
         return Q
     
     
