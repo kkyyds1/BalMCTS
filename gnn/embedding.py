@@ -8,9 +8,60 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
 from torch_geometric.nn import MessagePassing
 
-import sys
-sys.path.append('..')
 from entry.data import *
+# class DataProcessor:
+#     def __init__(self, variables, constraints):
+#         self.variables = variables
+#         self.constraints = constraints
+
+#     def get_variable_info(self):
+#         variable_info = []
+#         for variable in self.variables:
+#             domain_length = len(self.variables[variable].domain)
+#             is_assigned = self.variables[variable].is_assigned
+#             variable_info.append([domain_length, is_assigned])
+#         return variable_info
+
+#     def get_constraint_info(self):
+#         constraint_info = []
+#         domain_product = 1
+#         for constraint in self.constraints:
+#             for var in self.constraints[constraint].variables:
+#                 domain_product *= len(self.variables[var].domain)
+#             allowed_tuples = len(self.constraints[constraint].relations)
+#             num_variables = len(self.constraints[constraint].variables)
+#             dynamic_compactness = 1 - allowed_tuples / domain_product
+#             constraint_info.append([num_variables, dynamic_compactness])
+#         return constraint_info
+
+#     def generate_edge_index(self):
+#         edge_index = []
+#         var_constr_index = [[] for _ in range(len(self.variables))]
+#         constr_var_index = [[] for _ in range(len(self.constraints))]
+#         for constraint in self.constraints.values():
+#             constr_index = constraint.index 
+            
+#             for var in constraint.variables:
+#                 var_index = self.variables[var].index
+#                 var_constr_index[var_index].append(constr_index)
+#                 constr_var_index[constr_index].append(var_index)
+               
+#                 edge_index.append([constr_index + len(self.variables), var_index])
+#                 edge_index.append([var_index, constr_index + len(self.variables)])
+
+#         return edge_index, var_constr_index, constr_var_index
+
+#     def create_data(self):
+#         variable_info = self.get_variable_info()
+#         constraint_info = self.get_constraint_info()
+
+#         edge_index, var_constr_index, constr_var_index = self.generate_edge_index()
+#         data = Data(x=None, edge_index=edge_index)
+#         data.x = torch.tensor(variable_info + constraint_info, dtype=torch.float)
+#         data.num_nodes = len(var_constr_index) + len(constr_var_index)
+        
+#         return data, var_constr_index, constr_var_index
+
 
 def get_variable_info(variables):
     variable_info = []
@@ -208,6 +259,49 @@ class GNN(nn.Module):
     @classmethod
     def load_model(cls, net, path):
         net.load_state_dict(torch.load(path))
+
+class DDQN:
+    def __init__(self, input_dim, output_dim, init_input_dim, init_output_dim, num_layers, phase, path=None):
+        self.target_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers)
+        self.online_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers)
+
+        if phase == 'Training':
+            self.load_model(path)
+
+    def samples(self, epr, batch_size):
+        samples = epr.sample(batch_size)
+        losses = []
+        for sample in samples:
+            state, var_constr_index, constr_var_index, action, next_state, next_var_constr_index, next_constr_var_index, reward, T = sample
+            
+            predicted_Q = self.online_net.predict(next_var_constr_index, next_constr_var_index, next_state)
+            predicted_q = predicted_Q[action].unsqueeze(0)  # Select the Q value for the action and add a dimension
+            
+            # 如果是终止状态，目标Q值就是奖励
+            if T:
+                target_q = torch.tensor([reward])
+            else:
+                # 否则，目标Q值是奖励加上折扣后的未来最小Q值
+                next_Q = self.target_net.predict(next_var_constr_index, next_constr_var_index, next_state)
+                next_q = torch.min(next_Q)
+                y = torch.tensor([reward]) + 0.99 * next_q
+            loss = self.online_net.update_parameters(predicted_q, y)
+            
+            losses.append(loss.item())
+
+        return losses
+
+    def update_model(self, old_net, new_net):
+        new_state_dict = self.online_net.state_dict()
+        self.target_net.load_state_dict(new_state_dict)
+
+    def save_model(self, path):
+        torch.save(self.target.state_dict(), path)
+    
+    def load_model(self, path):
+        self.online_net.load_state_dict(torch.load(path))
+        self.target_net.load_state_dict(torch.load(path))
+        
 # data = create_data(variables, constraints)
 
 # # 创建 GNN 模型
