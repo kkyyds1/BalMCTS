@@ -199,9 +199,6 @@ class GNN(nn.Module):
         
         Q = self.embedding_Q()
         
-        # for var_index in range(len(var_constr_index)):
-        #     if int(data.x[var_index][1]):
-        #         Q[var_index] = float('inf')
         return Q
     
     def update_parameters(self, predicted_q, target_q):
@@ -302,6 +299,8 @@ class DDQN:
         self.online_net.load_state_dict(torch.load(path))
         self.target_net.load_state_dict(torch.load(path))
         
+
+
 # data = create_data(variables, constraints)
 
 # # 创建 GNN 模型
