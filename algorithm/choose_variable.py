@@ -4,11 +4,11 @@ import torch
 import numpy as np
 import ipdb
 
-def choose_variable(assignment, variables, domains, constraints, target_net, epsilon, var_selector):
+def choose_variable(assignment, variables, domains, constraints, target_net, epsilon, var_selector, phase):
     if var_selector == 'CHOOSE_FIRST_UNBOUND':
         res = choose_first_unbound(assignment, variables)
     elif var_selector == 'CHOOSE_MIN_Q':
-        res = choose_min_q(assignment, variables, constraints, target_net, epsilon)
+        res = choose_min_q(assignment, variables, constraints, target_net, epsilon, phase)
     elif var_selector == 'CHOOSE_DDEG':
         res = choose_ddeg(assignment, variables, domains, constraints)
     elif var_selector == 'CHOOSE_RANDOM':
@@ -22,17 +22,17 @@ def choose_first_unbound(assignment, variables):
     unassigned = [v for v in variables if v not in assignment]
     return unassigned[0]
 
-def choose_min_q(assignment, variables, constraints, target_net, epsilon):
+def choose_min_q(assignment, variables, constraints, target_net, epsilon, phase):
     data, var_constr_index, constr_var_index = create_data(variables, constraints)
-    if np.random.rand() < epsilon:
+    
+    if phase == 'Training' and np.random.rand() < epsilon:
         return choose_random(assignment, variables, constraints)
-    else:
-        Q = target_net.predict(var_constr_index, constr_var_index, data)
-        for var_index in range(len(var_constr_index)):
-            if int(data.x[var_index][1]):
-                Q[var_index] = float('inf')
-        index = torch.argmin(Q).item()
-        return f'x{index}'
+    Q = target_net.predict(var_constr_index, constr_var_index, data)
+    for var_index in range(len(var_constr_index)):
+        if int(data.x[var_index][1]):
+            Q[var_index] = float('inf')
+    index = torch.argmin(Q).item()
+    return f'x{index}'
 
 def choose_ddeg(assignment, variables, domains, constraints):
     # 计算每个未赋值变量的动态紧致度
