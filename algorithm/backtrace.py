@@ -53,7 +53,7 @@ def check_constraints(assignment, constraints):
     
 epr = ExperienceReplayBuffer(1000)
 
-def backtrack(assignment, variables, constraints, online_net, target_net, epsilon, value_selector, var_selector, train_freq, update_freq, phase):
+def backtrack(assignment, variables, constraints, ddqn, epsilon, value_selector, var_selector, train_freq, update_freq, phase):
     stack = [(assignment, variables)]
     count = 0
     losses = []
@@ -70,34 +70,18 @@ def backtrack(assignment, variables, constraints, online_net, target_net, epsilo
             continue
 
         # 选择一个还没有赋值的变量
-        action = choose_variable(assignment, variables, domains, constraints, target_net, epsilon, var_selector, phase)
-        state, var_constr_index, constr_var_index = create_data(variables, constraints)
-        action_index = int(action[1:])
+        action = choose_variable(assignment, variables, domains, constraints, ddqn.target_net, epsilon, var_selector, phase)
+        
         # 根据你的策略选择值并进行赋值
-        for local_assignment, variables in assign_value(action, assignment, variables, domains, constraints, value_selector):
+        for local_assignment, local_variables in assign_value(action, assignment, variables, domains, constraints, value_selector):
 
             # 如果这个赋值满足所有的约束，那么就在这个赋值的基础上递归地进行回溯搜索
             if check_constraints(local_assignment, constraints):
                 count += 1
 
-                update_variables = constraint_propagation(local_assignment, variables, domains, constraints)
+                update_variables = constraint_propagation(local_assignment, local_variables, domains, constraints)
 
                 if phase == 'Training':
-                    next_state, next_var_constr_index, next_constr_var_index = create_data(variables, constraints)
-                    
-                    # 把经验放到缓冲区
-                    if len(assignment) == len(variables):
-                        epr.add((state, var_constr_index, constr_var_index, action_index, next_state, next_var_constr_index, next_constr_var_index, 1, 1))
-                    else:
-                        epr.add((state, var_constr_index, constr_var_index, action_index, next_state, next_var_constr_index, next_constr_var_index, 1, 0))
-                    
-                    # nstep采样， 更新online net
-                    if count % train_freq == 0:
-                        loss = GNN.samples(target_net, online_net, epr, batch_size=train_freq)
-                        losses.extend(loss)
-
-                    # 把online net 的参数复制给target net
-                    if count % update_freq == 0:
-                        target_net = GNN.update_model(target_net, online_net)
+                    ddqn.store_experience(assignment, variables, local_assignment, update_variables, constraints, action, count, train_freq, update_freq)
                 
                 stack.append((local_assignment, update_variables))

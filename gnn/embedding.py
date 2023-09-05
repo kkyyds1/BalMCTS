@@ -8,6 +8,7 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
 from torch_geometric.nn import MessagePassing
 
+from gnn.ExperienceReplay import ExperienceReplayBuffer
 from entry.data import *
 # class DataProcessor:
 #     def __init__(self, variables, constraints):
@@ -209,7 +210,9 @@ class DDQN:
     def __init__(self, input_dim, output_dim, init_input_dim, init_output_dim, num_layers, phase, path=None):
         self.target_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers)
         self.online_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers)
-
+        self.phase = phase
+        self.experience_buffer = ExperienceReplayBuffer(500)
+        self.losses = []
         if phase == 'Training':
             self.load_model(path)
 
@@ -264,6 +267,26 @@ class DDQN:
 
         return loss
 
+    def store_experience(self, assignment, variables, local_assignment, update_variables, constraints, action, count, train_freq, update_freq):
+        if self.phase == 'Training':
+            state, var_constr_index, constr_var_index = create_data(variables, constraints)
+            action_index = int(action[1:])
+            next_state, next_var_constr_index, next_constr_var_index = create_data(update_variables, constraints)
+            
+            # 把经验放到缓冲区
+            if len(local_assignment) == len(variables):
+                self.experience_buffer.add((state, var_constr_index, constr_var_index, action_index, next_state, next_var_constr_index, next_constr_var_index, 1, 1))
+            else:
+                self.experience_buffer.add((state, var_constr_index, constr_var_index, action_index, next_state, next_var_constr_index, next_constr_var_index, 1, 0))
+            
+            # nstep采样， 更新online net
+            if count % train_freq == 0:
+                loss = self.samples(epr, batch_size=train_freq)
+                self.losses.extend(loss)
+
+            # 把online net 的参数复制给target net
+            if count % update_freq == 0:
+                self.update_model()
 # data = create_data(variables, constraints)
 
 # # 创建 GNN 模型
