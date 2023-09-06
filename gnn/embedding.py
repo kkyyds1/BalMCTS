@@ -193,28 +193,30 @@ class GNN(nn.Module):
         Q = self.fc_q_value(variable_cat_features)
         return Q
     
-    def predict(self, var_constr_index, constr_var_index, data, action=False):
+    def predict(self, var_constr_index, constr_var_index, data, flag=0):
         # 创建变量和约束每一层的特征张量
         self.initialize_layer_zero(data.x, len(var_constr_index))
         self.aggregate(var_constr_index, constr_var_index, data.x)
         
-        Q = self.embedding_Q(data,var_constr_index)
-        if action:
-            for var_index in range(len(var_constr_index)):
+        Q = self.embedding_Q()
+        for var_index in range(len(var_constr_index)):
                 if int(data.x[var_index][1]):
                     Q[var_index] = float('inf')
+        if flag == 1:
             return torch.argmin(Q).item()
+        elif flag == 2:
+            return torch.min(Q)
         return Q
     
 class DDQN:
-    def __init__(self, input_dim, output_dim, init_input_dim, init_output_dim, num_layers, phase, path=None):
+    def __init__(self, input_dim, output_dim, init_input_dim, init_output_dim, num_layers, phase, model_path=None):
         self.target_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers)
         self.online_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers)
         self.phase = phase
         self.experience_buffer = ExperienceReplayBuffer(500)
         self.losses = []
         if phase == 'Training':
-            self.load_model(path)
+            self.load_model(model_path)
 
     def samples(self, epr, batch_size):
         samples = epr.sample(batch_size)
@@ -222,9 +224,9 @@ class DDQN:
         for sample in samples:
             state, var_constr_index, constr_var_index, action, next_state, next_var_constr_index, next_constr_var_index, reward, T = sample
             
-            predicted_q = self.online_net.predict(var_constr_index, constr_var_index, state, action=True)  # Select the Q value for the action and add a dimension
+            predicted_q = self.online_net.predict(var_constr_index, constr_var_index, state, flag=2)  # Select the Q value for the action and add a dimension
             
-            predicted_action = self.online_net.predict(next_var_constr_index, next_constr_var_index, next_state, action=True)
+            predicted_action = self.online_net.predict(next_var_constr_index, next_constr_var_index, next_state, flag=1)
             
             # 如果是终止状态，目标Q值就是奖励
             if T:
@@ -232,20 +234,20 @@ class DDQN:
             else:
                 # 否则，目标Q值是奖励加上折扣后的未来最小Q值
                 next_Q = self.target_net.predict(next_var_constr_index, next_constr_var_index, next_state)
-                next_q = next_Q(predicted_action)
-                y = torch.tensor([reward]) + 0.99 * next_q
-            loss = self.online_net.update_parameters(predicted_q, y)
+                next_q = next_Q[predicted_action][0]
+                y = reward + 0.99 * next_q
+            loss = self.update_parameters(predicted_q, y)
             
             losses.append(loss.item())
 
         return losses
 
-    def update_model(self, old_net, new_net):
+    def update_model(self):
         new_state_dict = self.online_net.state_dict()
         self.target_net.load_state_dict(new_state_dict)
 
     def save_model(self, path):
-        torch.save(self.target.state_dict(), path)
+        torch.save(self.target_net.state_dict(), path)
     
     def load_model(self, path):
         self.online_net.load_state_dict(torch.load(path))
@@ -258,10 +260,10 @@ class DDQN:
 
         # Zero gradients
         optimizer.zero_grad()
-
+        
         # Perform a backward pass (backpropagation)
         loss.backward()
-
+        
         # Update the parameters
         optimizer.step()
 
@@ -281,7 +283,7 @@ class DDQN:
             
             # nstep采样， 更新online net
             if count % train_freq == 0:
-                loss = self.samples(epr, batch_size=train_freq)
+                loss = self.samples(self.experience_buffer, batch_size=train_freq)
                 self.losses.extend(loss)
 
             # 把online net 的参数复制给target net
