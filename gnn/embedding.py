@@ -11,60 +11,6 @@ from torch_geometric.nn import MessagePassing
 from gnn.ExperienceReplay import ExperienceReplayBuffer
 from entry.data import *
 
-
-# class DataProcessor:
-#     def __init__(self, variables, constraints):
-#         self.variables = variables
-#         self.constraints = constraints
-
-#     def get_variable_info(self):
-#         variable_info = []
-#         for variable in self.variables:
-#             domain_length = len(self.variables[variable].domain)
-#             is_assigned = self.variables[variable].is_assigned
-#             variable_info.append([domain_length, is_assigned])
-#         return variable_info
-
-#     def get_constraint_info(self):
-#         constraint_info = []
-#         domain_product = 1
-#         for constraint in self.constraints:
-#             for var in self.constraints[constraint].variables:
-#                 domain_product *= len(self.variables[var].domain)
-#             allowed_tuples = len(self.constraints[constraint].relations)
-#             num_variables = len(self.constraints[constraint].variables)
-#             dynamic_compactness = 1 - allowed_tuples / domain_product
-#             constraint_info.append([num_variables, dynamic_compactness])
-#         return constraint_info
-
-#     def generate_edge_index(self):
-#         edge_index = []
-#         var_constr_index = [[] for _ in range(len(self.variables))]
-#         constr_var_index = [[] for _ in range(len(self.constraints))]
-#         for constraint in self.constraints.values():
-#             constr_index = constraint.index 
-            
-#             for var in constraint.variables:
-#                 var_index = self.variables[var].index
-#                 var_constr_index[var_index].append(constr_index)
-#                 constr_var_index[constr_index].append(var_index)
-               
-#                 edge_index.append([constr_index + len(self.variables), var_index])
-#                 edge_index.append([var_index, constr_index + len(self.variables)])
-
-#         return edge_index, var_constr_index, constr_var_index
-
-#     def create_data(self):
-#         variable_info = self.get_variable_info()
-#         constraint_info = self.get_constraint_info()
-
-#         edge_index, var_constr_index, constr_var_index = self.generate_edge_index()
-#         data = Data(x=None, edge_index=edge_index)
-#         data.x = torch.tensor(variable_info + constraint_info, dtype=torch.float)
-#         data.num_nodes = len(var_constr_index) + len(constr_var_index)
-        
-#         return data, var_constr_index, constr_var_index
-
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 def get_variable_info(variables):
@@ -118,6 +64,26 @@ def create_data(variables, constraints):
     data.num_nodes = len(var_constr_index) + len(constr_var_index)
     data.to(device)
     return data, var_constr_index, constr_var_index
+
+def create_data_batch(variables_batch, constraints_batch):
+    data_batch = []
+    var_constr_index_batch = []
+    constr_var_index_batch = []
+
+    for variables, constraints in zip(variables_batch, constraints_batch):
+        variable_info = get_variable_info(variables)
+        constraint_info = get_constraint_info(variables, constraints)
+
+        edge_index, var_constr_index, constr_var_index = generate_edge_index(variables, constraints)
+        data = Data(x=None, edge_index=edge_index)
+        data.x = torch.tensor(variable_info + constraint_info, dtype=torch.float)
+        data.num_nodes = len(var_constr_index) + len(constr_var_index)
+
+        data_batch.append(data)
+        var_constr_index_batch.append(var_constr_index)
+        constr_var_index_batch.append(constr_var_index)
+
+    return data_batch, var_constr_index_batch, constr_var_index_batch
 
 class GNN(nn.Module):
     def __init__(self, input_dim, output_dim, init_input_dim, init_output_dim, num_layers):
@@ -211,41 +177,67 @@ class GNN(nn.Module):
             return torch.min(Q)
         return Q
     
+    def predict_batch(self, var_constr_index_batch, constr_var_index_batch, data_batch, flag=0):
+        Q_batch = []
+        for var_constr_index, constr_var_index, data in zip(var_constr_index_batch, constr_var_index_batch, data_batch):
+            self.initialize_layer_zero(data.x, len(var_constr_index))
+            self.aggregate(var_constr_index, constr_var_index, data.x)
+            
+            Q = self.embedding_Q()
+            for var_index in range(len(var_constr_index)):
+                    if int(data.x[var_index][1]):
+                        Q[var_index] = float('inf')
+            Q_batch.append(Q)
+
+        if flag == 1:
+            return [torch.argmin(Q).item() for Q in Q_batch]
+        elif flag == 2:
+            return [torch.min(Q) for Q in Q_batch]
+        return Q_batch
+
 class DDQN:
     def __init__(self, input_dim, output_dim, init_input_dim, init_output_dim, num_layers, phase, model_path=None):
         self.target_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers).to(device)
         self.online_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers).to(device)
 
         self.phase = phase
-        self.experience_buffer = ExperienceReplayBuffer(500)
+        self.experience_buffer = ExperienceReplayBuffer(4096)
         self.losses = []
-        if phase == 'Training':
+        if phase == 'Evaluation':
             self.load_model(model_path)
 
     def samples(self, epr, batch_size):
+        # 从经验回放缓冲区中采样
         samples = epr.sample(batch_size)
-        losses = []
-        for sample in samples:
-            state, var_constr_index, constr_var_index, action, next_state, next_var_constr_index, next_constr_var_index, reward, T = sample
-            
-            predicted_q = self.online_net.predict(var_constr_index, constr_var_index, state, flag=2)  # Select the Q value for the action and add a dimension
-            predicted_q = predicted_q.unsqueeze(0).to(device)
-            predicted_action = self.online_net.predict(next_var_constr_index, next_constr_var_index, next_state, flag=1)
-            
-            # 如果是终止状态，目标Q值就是奖励
-            if T:
-                y = torch.tensor([reward], dtype=torch.float32, requires_grad=True).to(device)
-            else:
-                # 否则，目标Q值是奖励加上折扣后的未来最小Q值
-                next_Q = self.target_net.predict(next_var_constr_index, next_constr_var_index, next_state)
-                next_q = next_Q[predicted_action]
-                y = reward + 0.99 * next_q
-                y = y.to(device)
-            loss = self.update_parameters(predicted_q, y)
-            
-            losses.append(loss.item())
+        # 解压缩样本
+        states, var_constr_indices, constr_var_indices, actions, next_states, next_var_constr_indices, next_constr_var_indices, rewards, Ts = zip(*samples)
 
-        return losses
+        # 将rewards和Ts转换为张量并移动到设备上
+        rewards = torch.tensor(rewards).unsqueeze(1).to(device)
+        Ts = torch.tensor(Ts).unsqueeze(1).to(device)
+
+        # 使用在线网络预测Q值
+        predicted_qs = self.online_net.predict_batch(var_constr_indices, constr_var_indices, states, flag=2)
+        # 将预测的Q值转换为张量并设置requires_grad属性
+        predicted_qs = torch.Tensor(predicted_qs).to(device)
+        predicted_qs.requires_grad_()
+
+        # 使用在线网络预测动作
+        predicted_actions = self.online_net.predict_batch(next_var_constr_indices, next_constr_var_indices, next_states, flag=1)
+
+        # 使用目标网络预测Q值
+        target_Qs = self.target_net.predict_batch(next_var_constr_indices, next_constr_var_indices, next_states)
+        # 选择预测动作对应的Q值，并转换为张量
+        target_qs = torch.Tensor([qs[predicted_actions[index]] for index, qs in enumerate(target_Qs)]).to(device)
+
+        # 计算目标Q值
+        y = rewards.squeeze(1) + (1 - Ts.squeeze(1)) * 0.99 * target_qs
+
+        # 更新参数并返回损失
+        loss = self.update_parameters(predicted_qs, y)
+        return [loss.item()] * len(samples)
+
+        return loss
 
     def update_model(self):
         new_state_dict = self.online_net.state_dict()
@@ -265,7 +257,7 @@ class DDQN:
 
         # Zero gradients
         optimizer.zero_grad()
-        
+
         # Perform a backward pass (backpropagation)
         loss.backward()
         
