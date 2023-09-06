@@ -56,7 +56,6 @@ epr = ExperienceReplayBuffer(1000)
 def backtrack(assignment, variables, constraints, ddqn, epsilon, value_selector, var_selector, train_freq, update_freq, phase):
     stack = [(assignment, variables)]
     count = 0
-    losses = []
     while stack:
         assignment, variables = stack.pop()
         domains = [var.domain for var in variables.values()]
@@ -64,8 +63,7 @@ def backtrack(assignment, variables, constraints, ddqn, epsilon, value_selector,
         if len(assignment) == len(variables):
             # 打印搜索次数
             print(count)
-            yield assignment, losses
-            losses = []
+            yield assignment
 
             continue
 
