@@ -10,6 +10,8 @@ from torch_geometric.nn import MessagePassing
 
 from gnn.ExperienceReplay import ExperienceReplayBuffer
 from entry.data import *
+
+
 # class DataProcessor:
 #     def __init__(self, variables, constraints):
 #         self.variables = variables
@@ -63,6 +65,7 @@ from entry.data import *
         
 #         return data, var_constr_index, constr_var_index
 
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 def get_variable_info(variables):
     variable_info = []
@@ -113,7 +116,7 @@ def create_data(variables, constraints):
     # 设置节点和边的属性
     data.x = torch.tensor(variable_info + constraint_info, dtype=torch.float)
     data.num_nodes = len(var_constr_index) + len(constr_var_index)
-    
+    data.to(device)
     return data, var_constr_index, constr_var_index
 
 class GNN(nn.Module):
@@ -124,13 +127,13 @@ class GNN(nn.Module):
 
         self.num_layers = num_layers
         
-        self.fc_variable   = nn.Linear(input_dim, output_dim)
-        self.fc_constraint = nn.Linear(input_dim, output_dim)
+        self.fc_variable   = nn.Linear(input_dim, output_dim).to(device)
+        self.fc_constraint = nn.Linear(input_dim, output_dim).to(device)
         
-        self.fc_init_variables = nn.Linear(init_input_dim, init_output_dim)
-        self.fc_init_constraints = nn.Linear(init_input_dim, init_output_dim)
+        self.fc_init_variables = nn.Linear(init_input_dim, init_output_dim).to(device)
+        self.fc_init_constraints = nn.Linear(init_input_dim, init_output_dim).to(device)
         
-        self.fc_q_value = nn.Linear(output_dim * 2, 1)
+        self.fc_q_value = nn.Linear(output_dim * 2, 1).to(device)
     
     def initialize_layer_zero(self, x, num_variables):
         variable_features = x[:num_variables]
@@ -146,7 +149,7 @@ class GNN(nn.Module):
         # 获取变量节点和约束节点的初始特征
         variable_features = x[:len(var_constr_index)]
         constraint_features = x[len(var_constr_index):]
-        zeros_tensor = torch.zeros((1, self.output_dim))
+        zeros_tensor = torch.zeros((1, self.output_dim)).to(device)
 
         for k in range(1, self.num_layers):
             last_variable_features  = torch.cat((self.last_variable_features, zeros_tensor))
@@ -210,8 +213,9 @@ class GNN(nn.Module):
     
 class DDQN:
     def __init__(self, input_dim, output_dim, init_input_dim, init_output_dim, num_layers, phase, model_path=None):
-        self.target_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers)
-        self.online_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers)
+        self.target_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers).to(device)
+        self.online_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers).to(device)
+
         self.phase = phase
         self.experience_buffer = ExperienceReplayBuffer(500)
         self.losses = []
@@ -225,17 +229,18 @@ class DDQN:
             state, var_constr_index, constr_var_index, action, next_state, next_var_constr_index, next_constr_var_index, reward, T = sample
             
             predicted_q = self.online_net.predict(var_constr_index, constr_var_index, state, flag=2)  # Select the Q value for the action and add a dimension
-            
+            predicted_q = predicted_q.unsqueeze(0).to(device)
             predicted_action = self.online_net.predict(next_var_constr_index, next_constr_var_index, next_state, flag=1)
             
             # 如果是终止状态，目标Q值就是奖励
             if T:
-                y = torch.tensor([reward])
+                y = torch.tensor([reward], dtype=torch.float32, requires_grad=True).to(device)
             else:
                 # 否则，目标Q值是奖励加上折扣后的未来最小Q值
                 next_Q = self.target_net.predict(next_var_constr_index, next_constr_var_index, next_state)
-                next_q = next_Q[predicted_action][0]
+                next_q = next_Q[predicted_action]
                 y = reward + 0.99 * next_q
+                y = y.to(device)
             loss = self.update_parameters(predicted_q, y)
             
             losses.append(loss.item())
@@ -256,7 +261,7 @@ class DDQN:
     def update_parameters(self, predicted_q, target_q):
         optimizer = optim.Adam(self.online_net.parameters(), lr=0.01)
         # Compute the loss
-        loss = F.mse_loss(predicted_q, target_q)
+        loss = F.mse_loss(predicted_q, target_q).to(device)
 
         # Zero gradients
         optimizer.zero_grad()
