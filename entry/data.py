@@ -12,3 +12,4 @@ class Constraint:
     index: int
     variables: tuple
     relations: list
+    product: int

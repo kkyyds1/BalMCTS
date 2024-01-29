@@ -1,2 +1,5 @@
 output/problems/*
-*/__pycache__
+output/losses/*
+output/models/*
+output/pictures/*
+*/__pycache__/*
