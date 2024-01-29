@@ -62,7 +62,7 @@ class BalMCTS:
     
     def mirror(self, assignment):
         assignment_copy = list(deepcopy(assignment).keys())
-        assignment_keys[-1], assignment[-2] = assignment[-2], assignment[-1]
+        assignment_copy[-1], assignment_copy[-2] = assignment_copy[-2], assignment_copy[-1]
         node = self.root
         for var in assignment_copy:
             node = node.children[var]
@@ -92,8 +92,8 @@ class BalMCTS:
         while node.children:
             var = self.selection(node, assignment)
             node = node.children[var]
-            if varname not in assignment:
-                assignment[varname] = node.value
+            if var not in assignment:
+                assignment[var] = node.value
         node = self.expansion(node, assignment)
         for _ in range(10):
             result, simulation_assignment = self.simulation(node, assignment)
