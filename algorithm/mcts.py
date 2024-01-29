@@ -26,6 +26,7 @@ class VarNode:
         self.domain = domain
         self.visits = 0
         self.wins = 0
+        self.alpha = 0
 
 class ValNode:
     def __init__(self, parent):
@@ -41,6 +42,9 @@ class BalMCTS:
         self.root = ValNode(0, None, self.cop.variables)
     
     def selection(self, node, assignment):
+        variables = self.cop.variables
+        domains = self.cop.domains
+        constraints = self.cop.constraints
         return choose_variable(assignment, variables, domains, constraints, node, var_selector='CHOOSE_MCTS')
         
     def expansion(self, varNode, assignment):
@@ -67,6 +71,7 @@ class BalMCTS:
         for var in assignment_copy:
             node = node.children[var]
             if var not in node.children:
+                node.alpha = 0.99
                 node.children[var] = VarNode(var, self.cop.domains[var], node)
                 node = node.children[assignment[var]]
                 return
