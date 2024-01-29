@@ -1,4 +1,5 @@
 import numpy as np
+import ipdb
 from collections import deque
 
 class ExperienceReplayBuffer:
@@ -9,6 +10,7 @@ class ExperienceReplayBuffer:
         self.buffer.append(experience)
 
     def sample(self, batch_size):
+     
         indices = np.random.choice(len(self.buffer), batch_size, replace=False)
         return [self.buffer[i] for i in indices]
 

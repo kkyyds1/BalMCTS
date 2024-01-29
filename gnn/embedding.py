@@ -1,18 +1,20 @@
 import ipdb
+import sys
+sys.path.append('/home/xiaoyingkai/learningcsp')
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-
+from entry.parser import parser_data
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
 from torch_geometric.nn import MessagePassing
 
 from gnn.ExperienceReplay import ExperienceReplayBuffer
 from entry.data import *
-
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
+from entry.parameter import *
+device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+# variables, constraints = parser_data(f'output/problems/{0}.txt')
 def get_variable_info(variables):
     variable_info = []
     for variable in variables:
@@ -25,12 +27,14 @@ def get_constraint_info(variables, constraints):
     constraint_info = []
     domain_product = 1
     for constraint in constraints:
-        for var in constraints[constraint].variables:
-            domain_product *= len(variables[var].domain)
+        domain_product = constraints[constraint].product
         allowed_tuples = len(constraints[constraint].relations)
-        # domain_product = len(dom1) * len(dom2)
         num_variables = len(constraints[constraint].variables)
         dynamic_compactness = 1 - allowed_tuples / domain_product
+        # try:
+        #     min_value = (min(constraints[constraint].relations, key=lambda x:x[2])[2] - min_cost) / (max_cost - min_cost)
+        # except:
+        #     min_value = max_cost
         constraint_info.append([num_variables, dynamic_compactness])
     return constraint_info
 
@@ -48,7 +52,6 @@ def generate_edge_index(variables, constraints):
            
             edge_index.append([constr_index + + len(variables), var_index])
             edge_index.append([var_index, constr_index + + len(variables)])
-
     return edge_index, var_constr_index, constr_var_index
 
 def create_data(variables, constraints):
@@ -64,7 +67,7 @@ def create_data(variables, constraints):
     data.num_nodes = len(var_constr_index) + len(constr_var_index)
     data.to(device)
     return data, var_constr_index, constr_var_index
-
+ 
 def create_data_batch(variables_batch, constraints_batch):
     data_batch = []
     var_constr_index_batch = []
@@ -92,7 +95,7 @@ class GNN(nn.Module):
         self.output_dim = output_dim
 
         self.num_layers = num_layers
-        
+
         self.fc_variable   = nn.Linear(input_dim, output_dim).to(device)
         self.fc_constraint = nn.Linear(input_dim, output_dim).to(device)
         
@@ -135,7 +138,7 @@ class GNN(nn.Module):
 
             # 拼接特征矩阵
             constraint_cat_features = torch.cat([constraint_aggregated_features, self.last_constraint_features, constraint_features], dim=1)
-            
+
             self.last_constraint_features = self.fc_constraint(constraint_cat_features)
 
             # 获取约束节点的邻居变量节点的索引
@@ -166,7 +169,6 @@ class GNN(nn.Module):
         # 创建变量和约束每一层的特征张量
         self.initialize_layer_zero(data.x, len(var_constr_index))
         self.aggregate(var_constr_index, constr_var_index, data.x)
-        
         Q = self.embedding_Q()
         for var_index in range(len(var_constr_index)):
                 if int(data.x[var_index][1]):
@@ -177,18 +179,22 @@ class GNN(nn.Module):
             return torch.min(Q)
         return Q
     
-    def predict_batch(self, var_constr_index_batch, constr_var_index_batch, data_batch, flag=0):
+    def predict_batch(self, var_constr_index_batch, constr_var_index_batch, data_batch, flag=0, actions= None):
         Q_batch = []
         for var_constr_index, constr_var_index, data in zip(var_constr_index_batch, constr_var_index_batch, data_batch):
             self.initialize_layer_zero(data.x, len(var_constr_index))
             self.aggregate(var_constr_index, constr_var_index, data.x)
             
             Q = self.embedding_Q()
+            # if all(data.x[0:len(var_constr_index)][:, 1]):
+            #     Q[var_index] = 1_000_000_000
             for var_index in range(len(var_constr_index)):
-                    if int(data.x[var_index][1]):
-                        Q[var_index] = float('inf')
+                if int(data.x[var_index][1]):
+                    Q[var_index] = 1_000_000_000
             Q_batch.append(Q)
 
+        # if actions is not None:
+        #     return [Q[action].item() for Q, action in zip(Q_batch, actions)]
         if flag == 1:
             return [torch.argmin(Q).item() for Q in Q_batch]
         elif flag == 2:
@@ -201,32 +207,32 @@ class DDQN:
         self.online_net = GNN(input_dim, output_dim, init_input_dim, init_output_dim, num_layers).to(device)
 
         self.phase = phase
-        self.experience_buffer = ExperienceReplayBuffer(4096)
+        self.experience_buffer = ExperienceReplayBuffer(9192)
         self.losses = []
-        if phase == 'Evaluation':
-            self.load_model(model_path)
+        self.load_model(model_path)
 
     def samples(self, epr, batch_size):
         # 从经验回放缓冲区中采样
         samples = epr.sample(batch_size)
         # 解压缩样本
-        states, var_constr_indices, constr_var_indices, actions, next_states, next_var_constr_indices, next_constr_var_indices, rewards, Ts = zip(*samples)
+        predicted_qs, actions, next_states, next_var_constr_indices, next_constr_var_indices, rewards, Ts = zip(*samples)
 
         # 将rewards和Ts转换为张量并移动到设备上
         rewards = torch.tensor(rewards).unsqueeze(1).to(device)
+        
         Ts = torch.tensor(Ts).unsqueeze(1).to(device)
 
-        # 使用在线网络预测Q值
-        predicted_qs = self.online_net.predict_batch(var_constr_indices, constr_var_indices, states, flag=2)
+        predicted_qs = torch.tensor(predicted_qs).unsqueeze(1).to(device)
+        
         # 将预测的Q值转换为张量并设置requires_grad属性
-        predicted_qs = torch.Tensor(predicted_qs).to(device)
         predicted_qs.requires_grad_()
-
+        
         # 使用在线网络预测动作
-        predicted_actions = self.online_net.predict_batch(next_var_constr_indices, next_constr_var_indices, next_states, flag=1)
-
+        predicted_actions = self.online_net.predict_batch(next_var_constr_indices, next_constr_var_indices, next_states, flag=1, actions=actions)
+        
         # 使用目标网络预测Q值
         target_Qs = self.target_net.predict_batch(next_var_constr_indices, next_constr_var_indices, next_states)
+        
         # 选择预测动作对应的Q值，并转换为张量
         target_qs = torch.Tensor([qs[predicted_actions[index]] for index, qs in enumerate(target_Qs)]).to(device)
 
@@ -235,9 +241,9 @@ class DDQN:
 
         # 更新参数并返回损失
         loss = self.update_parameters(predicted_qs, y)
+        self.losses.append(loss.item())
+        print(loss)
         return [loss.item()] * len(samples)
-
-        return loss
 
     def update_model(self):
         new_state_dict = self.online_net.state_dict()
@@ -251,7 +257,7 @@ class DDQN:
         self.target_net.load_state_dict(torch.load(path))
         
     def update_parameters(self, predicted_q, target_q):
-        optimizer = optim.Adam(self.online_net.parameters(), lr=0.01)
+        optimizer = optim.Adam(self.online_net.parameters())
         # Compute the loss
         loss = F.mse_loss(predicted_q, target_q).to(device)
 
@@ -266,28 +272,37 @@ class DDQN:
 
         return loss
 
-    def store_experience(self, assignment, variables, local_assignment, update_variables, constraints, action, count, train_freq, update_freq):
+    def store_experience(self, predict_q, action, local_assignment, update_variables, update_constraints, count, train_freq, update_freq, T = 0):
         if self.phase == 'Training':
-            state, var_constr_index, constr_var_index = create_data(variables, constraints)
-            action_index = int(action[1:])
-            next_state, next_var_constr_index, next_constr_var_index = create_data(update_variables, constraints)
+            next_state, next_var_constr_index, next_constr_var_index = create_data(update_variables, update_constraints)
             
             # 把经验放到缓冲区
-            if len(local_assignment) == len(variables):
-                self.experience_buffer.add((state, var_constr_index, constr_var_index, action_index, next_state, next_var_constr_index, next_constr_var_index, 1, 1))
+            if len(local_assignment) == len(update_variables):
+                self.experience_buffer.add((predict_q, action, next_state, next_var_constr_index, next_constr_var_index, 1, 1))
             else:
-                self.experience_buffer.add((state, var_constr_index, constr_var_index, action_index, next_state, next_var_constr_index, next_constr_var_index, 1, 0))
-            
+                self.experience_buffer.add((predict_q, action, next_state, next_var_constr_index, next_constr_var_index, 1, T))
+
             # nstep采样， 更新online net
             if count % train_freq == 0:
                 loss = self.samples(self.experience_buffer, batch_size=train_freq)
-                self.losses.extend(loss)
 
             # 把online net 的参数复制给target net
             if count % update_freq == 0:
                 self.update_model()
-# data = create_data(variables, constraints)
 
+    def training(self, states, actions, values):
+        state = [state for state, _, _ in states ]
+        var_constr_indices = [var_constr_indices for _, var_constr_indices, _ in states ]
+        constr_var_indices = [constr_var_indices for _, _, constr_var_indices in states ]
+        # 使用在线网络预测Q值
+        predicted_qs = self.target_net.predict_batch(var_constr_indices, constr_var_indices, state, flag=2, actions=actions)
+        # 将预测的Q值转换为张量并设置requires_grad属性
+        predicted_qs = torch.Tensor(predicted_qs).unsqueeze(1).to(device)
+        predicted_qs.requires_grad_()
+        values = torch.tensor(values).unsqueeze(1).to(device)
+        loss = self.update_parameters(predicted_qs, values)
+        print(loss / len(values))
+        
 # # 创建 GNN 模型
 # gnn = GNN(input_dim=12, output_dim=5, init_input_dim = 2, init_output_dim=5, num_layers=3, data=data)
 # action = gnn.predict(variables, constraints)
