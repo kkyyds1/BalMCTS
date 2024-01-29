@@ -4,7 +4,6 @@ import torch
 import math
 import numpy as np
 import ipdb
-
 def choose_variable(assignment, variables, domains, constraints, ddqn=None, epsilon=0.2, node=None, var_selector='CHOOSE_MIN_Q', phase='Training'):
     if var_selector == 'CHOOSE_FIRST_UNBOUND':
         res = choose_first_unbound(assignment, variables)
@@ -71,41 +70,19 @@ def choose_ddeg(assignment, variables, domains, constraints):
 
 def choose_mcts(assignment, variables, domains, constraints, node):
     # 计算每个未赋值变量的动态紧致度
-    unassigned = [v for v in variables if v not in assignment]
-    num_unbounded = {}
-    for name, constr in constraints.items():
-        tmp_count = 0
-        for var in constr.variables:
-            if var not in unassigned:
-                tmp_count += 1
-        num_unbounded[name] = tmp_count
-    
-    ddeg = {}
-    for name, var in variables.items():
-        if name not in unassigned:
-            continue
-        tmp_count = 1
-        for constr in var.constraints:
-            if num_unbounded[constr] >= 1:
-                tmp_count += 1
-        ddeg[name] = tmp_count
-
-    dynamic_tightness = {}
-    for name, var in variables.items():
-        if name in unassigned:
-            dynamic_tightness[name] = ddeg[name] / len(var.domain)
-    
     pi = {}
-    # 计算每个变量的pi 值， pi[i] = tightness + 0.8 * sqrt(log(node.parent.visit) / node.visit)
-    for var, tightness in dynamic_tightness.items():
-        filtered_children = {k: v for k, v in node.children.items() if var in k}
-        children_visits = 1
-        for k, v in filtered_children.items():
-            children_visits += v.visits
-        pi[var] = tightness + 0.8 * math.sqrt(math.log(node.visits + 1) / children_visits)
-    
+    unassigned = [v for v in variables if v not in assignment]
+    data, var_constr_index, constr_var_index = create_data(variables, constraints)
+    Q = target_net.predict(var_constr_index, constr_var_index, data)
+    index = torch.argmin(Q).item()
+    _, indices = torch.sort(Q, dim=0)
+    indices = indices.squeeze().tolist()
+    for var_index in range(len(var_constr_index)):
+        pi[var_index] = Q[var_index] - 0.5 * math.sqrt(math.log(node.visits + 1) / node.children[var_index].visits) - node.alpha
+        if int(data.x[var_index][1]):
+            indices.remove(var_index)
     pi = sorted(pi, key=pi.get, reverse=True)
-    return pi
+    return pi[0]
 
 def choose_mindom(assignment, variables, domains):
     # 计算每个未赋值变量的域的大小
